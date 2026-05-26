@@ -8,19 +8,28 @@ For where this repo fits in the broader interpose stack, see [where-this-fits.md
 
 | Flavor | Build | Validate | Smoke test | Image | Size |
 |---|---|---|---|---|---|
-| Ubuntu 24.04 / 6.8.0-117-generic | ✅ | ✅ all 8 flags | ✅ QEMU/HVF boot, `LSM support for eBPF active` in dmesg | `startaworldpeace/interpose-kernel:ubuntu-24.04-bpf-lsm-v0.1.0` | 137 MB |
+| Ubuntu 24.04 / 6.8.0-117-generic | ✅ | ✅ all 8 flags | ✅ QEMU/HVF boot + userspace-confirmed `bpf` in `/sys/kernel/security/lsm` from inside the VM | `startaworldpeace/interpose-kernel:ubuntu-24.04-bpf-lsm-v0.1.0` | 137 MB |
 | Debian 12 / 6.1.0-48-cloud-arm64 | ✅ | ✅ all 8 flags; `bpf` in default LSM chain | — (not yet — same Dockerfile, expected to behave identically without `lsm=` boot arg) | `startaworldpeace/interpose-kernel:debian-12-bpf-lsm-v0.1.0` | 201 MB |
 | Rocky 9                          | 🚧 | — | — | — | — |
 
-Smoke-test evidence for Ubuntu (QEMU on macOS arm64 with HVF accel, no rootfs, panic on missing root expected):
+Smoke-test evidence for Ubuntu (QEMU on macOS arm64 with HVF accel; Alpine 3.21 minirootfs as initrd; custom `/init` reads `/sys/kernel/security/lsm` then powers off):
 
 ```
-Linux version 6.8.0-117-generic ... #117-Ubuntu SMP PREEMPT_DYNAMIC
-Kernel command line: console=ttyAMA0 panic=1 lsm=landlock,lockdown,yama,integrity,apparmor,bpf
-LSM: initializing lsm=lockdown,capability,landlock,yama,apparmor,bpf,integrity
-landlock: Up and running.
-LSM support for eBPF active
+uname: Linux 6.8.0-117-generic #117-Ubuntu SMP PREEMPT_DYNAMIC aarch64 Linux
+
+active LSM chain (/sys/kernel/security/lsm):
+lockdown,capability,landlock,yama,apparmor,bpf
+
+/proc/filesystems has bpf?
+nodev	bpf
+
+kernel dmesg:
+[    0.000081] LSM: initializing lsm=lockdown,capability,landlock,yama,apparmor,bpf,integrity
+[    0.000103] LSM support for eBPF active
+[    0.116681] reboot: Power down
 ```
+
+`bpf` confirmed in the active LSM list from userspace inside the running VM — an LSM-BPF program can attach. Boot-to-shutdown took ~0.12 seconds (kernel dmesg timestamps).
 
 ## v0.2 themes
 
