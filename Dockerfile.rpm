@@ -1,0 +1,117 @@
+# Dockerfile.rpm — Rocky Linux flavor (rpm-based; separate from Ubuntu/Debian)
+#
+# Called by build.sh with build args from flavors/rocky/flavor.env.
+# Produces the same interpose-kernel artifact layout as Dockerfile.deb.
+
+ARG ROCKY_RELEASE
+ARG ROCKY_MINOR
+ARG KERNEL_VERSION
+ARG RPM_MIRROR
+ARG GPG_KEY_URL
+ARG GPG_KEY_FINGERPRINT
+ARG KERNEL_RPMS
+ARG FLAVOR_NAME
+ARG TAG_PREFIX
+ARG TARGETARCH
+
+# ─── Stage 1: fetch + verify + extract ─────────────────────────────────────
+FROM rockylinux:9 AS fetch
+
+ARG ROCKY_RELEASE
+ARG ROCKY_MINOR
+ARG KERNEL_VERSION
+ARG RPM_MIRROR
+ARG GPG_KEY_URL
+ARG GPG_KEY_FINGERPRINT
+ARG KERNEL_RPMS
+ARG FLAVOR_NAME
+ARG TARGETARCH
+
+# Tools: curl, rpm (for verification + extraction), cpio + tar
+RUN dnf install -y --setopt=install_weak_deps=False \
+        curl \
+        rpm \
+        cpio \
+        tar \
+        gzip \
+    && dnf clean all
+
+WORKDIR /work
+
+# Translate TARGETARCH to Rocky's arch name (amd64 → x86_64; arm64 → aarch64)
+RUN case "${TARGETARCH}" in \
+        amd64) echo x86_64 > /tmp/rocky_arch ;; \
+        arm64) echo aarch64 > /tmp/rocky_arch ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 64 ;; \
+    esac
+
+# Import Rocky's GPG key and verify its fingerprint
+RUN curl -fsSLO "${GPG_KEY_URL}" && \
+    KEY_FILE=$(basename ${GPG_KEY_URL}) && \
+    rpm --import "${KEY_FILE}" && \
+    gpg --show-keys "${KEY_FILE}" | grep -q "${GPG_KEY_FINGERPRINT}" && \
+    echo "GPG key verified: ${GPG_KEY_FINGERPRINT}"
+
+# Download each kernel rpm (kernel, kernel-core, kernel-modules, kernel-modules-core)
+RUN set -e && \
+    ROCKY_ARCH=$(cat /tmp/rocky_arch) && \
+    POOL="${RPM_MIRROR}/${ROCKY_MINOR}/AppStream/${ROCKY_ARCH}/os/Packages/k" && \
+    for pkg in ${KERNEL_RPMS}; do \
+        echo "fetching ${pkg}" && \
+        curl -fsSLO "${POOL}/${pkg}-${KERNEL_VERSION}.${ROCKY_ARCH}.rpm"; \
+    done && \
+    ls -la *.rpm
+
+# Verify each rpm signature
+RUN set -e && \
+    for rpm in *.rpm; do \
+        echo "verifying ${rpm}" && \
+        rpm --checksig "${rpm}" || { echo "SIGNATURE INVALID: ${rpm}" >&2; exit 1; }; \
+    done
+
+# Extract each rpm (rpm2cpio + cpio)
+RUN set -e && \
+    mkdir -p /staging && \
+    for rpm in *.rpm; do \
+        rpm2cpio "${rpm}" | (cd /staging && cpio -idm); \
+    done && \
+    echo "extracted:" && \
+    find /staging -maxdepth 3 -type d
+
+# Build the interpose-kernel artifact layout
+# Rocky kernel paths: /lib/modules/${KERNEL_VERSION}.${ARCH}/vmlinuz
+RUN set -e && \
+    ROCKY_ARCH=$(cat /tmp/rocky_arch) && \
+    KVER="${KERNEL_VERSION}.${ROCKY_ARCH}" && \
+    mkdir -p /out && \
+    cp "/staging/lib/modules/${KVER}/vmlinuz" /out/kernel && \
+    cp "/staging/lib/modules/${KVER}/System.map" /out/System.map && \
+    cp "/staging/lib/modules/${KVER}/config" /out/config && \
+    tar -C /staging/lib/modules -cf /out/kernel.tar "${KVER}" && \
+    tar -C /staging/usr/src -cf /out/kernel-dev.tar . 2>/dev/null || \
+        echo "(no kernel-devel rpm fetched — kernel-dev.tar will be minimal)" && \
+    echo "FLAVOR=${FLAVOR_NAME}" > /out/kernel-source-info && \
+    echo "KERNEL_VERSION=${KERNEL_VERSION}.${ROCKY_ARCH}" >> /out/kernel-source-info && \
+    echo "ROCKY_RELEASE=${ROCKY_RELEASE}" >> /out/kernel-source-info && \
+    echo "KERNEL_RPM_MIRROR=${RPM_MIRROR}" >> /out/kernel-source-info && \
+    echo "BUILD_TIMESTAMP=$(date -u +%FT%TZ)" >> /out/kernel-source-info && \
+    ls -la /out/
+
+# ─── Stage 2: scratch image with just the artifacts ────────────────────────
+FROM scratch AS final
+ARG FLAVOR_NAME
+ARG KERNEL_VERSION
+ARG TAG_PREFIX
+
+LABEL org.opencontainers.image.source="https://github.com/interposehq/interpose-kernel"
+LABEL org.opencontainers.image.description="interpose-kernel ${FLAVOR_NAME} flavor — repackaged Rocky kernel with BPF-LSM"
+LABEL interposehq.kernel.flavor="${FLAVOR_NAME}"
+LABEL interposehq.kernel.version="${KERNEL_VERSION}"
+LABEL interposehq.kernel.tag-prefix="${TAG_PREFIX}"
+
+COPY --from=fetch /out/kernel             /kernel
+COPY --from=fetch /out/kernel.tar         /kernel.tar
+COPY --from=fetch /out/kernel-dev.tar     /kernel-dev.tar
+COPY --from=fetch /out/System.map         /System.map
+COPY --from=fetch /out/config             /config
+COPY --from=fetch /out/kernel-source-info /kernel-source-info

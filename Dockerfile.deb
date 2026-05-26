@@ -1,0 +1,96 @@
+# Dockerfile.deb — shared multi-stage build for Ubuntu and Debian flavors.
+#
+# Strategy: use `apt-get download` inside the builder. apt already knows
+# the arch-correct mirror, the right pool subpath (linux-signed/ for kernel
+# images on Ubuntu vs. linux/ for headers), and verifies the package via
+# the signed Release/InRelease + Packages.gz chain — all things we'd
+# otherwise have to hand-construct.
+#
+# Flavor selects:
+#   - BUILDER_IMAGE: ubuntu:24.04 for Ubuntu flavor, debian:bookworm-slim for Debian
+#   - KERNEL_DEB_PACKAGES: space-separated list of `pkg=version` pins to download
+#
+# Both Ubuntu and Debian use this same Dockerfile; differences live in the
+# corresponding flavors/${FLAVOR}/flavor.env.
+
+ARG BUILDER_IMAGE=debian:bookworm-slim
+
+# ─── Stage 1: fetch + verify + extract via apt ──────────────────────────────
+FROM ${BUILDER_IMAGE} AS fetch
+
+ARG FLAVOR_NAME
+ARG KERNEL_VARIANT
+ARG KERNEL_VERSION
+ARG KERNEL_VERSION_FULL
+ARG KERNEL_DEB_DELTA
+ARG KERNEL_DEB_PACKAGES
+ARG TARGETARCH
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        dpkg-dev \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+
+# Refresh apt index, then download each kernel-related deb declared by the
+# flavor. apt-get download verifies signatures against the apt keyring that
+# ships with the builder image — apt's machinery handles arch routing
+# (archive.ubuntu.com vs ports.ubuntu.com) and pool layout (linux-signed/
+# for image vs linux/ for headers/modules) automatically. We pin every
+# package=version in KERNEL_DEB_PACKAGES for reproducibility.
+RUN apt-get update && \
+    apt-get download ${KERNEL_DEB_PACKAGES} && \
+    ls -la *.deb
+
+# Extract every downloaded deb into a single staging directory. The Ubuntu
+# split (linux-image, linux-modules, linux-headers) lays down complementary
+# paths (boot/, lib/modules/, usr/src/...) so they merge cleanly.
+RUN set -e && \
+    mkdir -p /staging && \
+    for deb in *.deb; do \
+        echo "extracting ${deb}" && \
+        dpkg-deb -x "${deb}" /staging; \
+    done && \
+    echo "--- /staging/boot ---" && \
+    ls -la /staging/boot/ 2>/dev/null || echo "no /boot" && \
+    echo "--- /staging/lib/modules ---" && \
+    ls /staging/lib/modules/ 2>/dev/null || echo "no /lib/modules" && \
+    echo "--- /staging/usr/src ---" && \
+    ls /staging/usr/src/ 2>/dev/null || echo "no /usr/src"
+
+# Build the interpose-kernel artifact layout
+RUN set -e && \
+    mkdir -p /out && \
+    cp "/staging/boot/vmlinuz-${KERNEL_VERSION_FULL}-${KERNEL_VARIANT}" /out/kernel && \
+    cp "/staging/boot/System.map-${KERNEL_VERSION_FULL}-${KERNEL_VARIANT}" /out/System.map && \
+    cp "/staging/boot/config-${KERNEL_VERSION_FULL}-${KERNEL_VARIANT}" /out/config && \
+    tar -C /staging/lib/modules -cf /out/kernel.tar "${KERNEL_VERSION_FULL}-${KERNEL_VARIANT}" && \
+    tar -C /staging/usr/src -cf /out/kernel-dev.tar . && \
+    echo "FLAVOR=${FLAVOR_NAME}" > /out/kernel-source-info && \
+    echo "KERNEL_VERSION=${KERNEL_VERSION_FULL}-${KERNEL_VARIANT}" >> /out/kernel-source-info && \
+    echo "KERNEL_PACKAGE_VERSION=${KERNEL_DEB_DELTA}" >> /out/kernel-source-info && \
+    echo "ARCH=${TARGETARCH}" >> /out/kernel-source-info && \
+    echo "BUILD_TIMESTAMP=$(date -u +%FT%TZ)" >> /out/kernel-source-info && \
+    ls -la /out/
+
+# ─── Stage 2: scratch image with just the artifacts ────────────────────────
+FROM scratch AS final
+ARG FLAVOR_NAME
+ARG KERNEL_VERSION_FULL
+ARG TAG_PREFIX
+
+LABEL org.opencontainers.image.source="https://github.com/interposehq/interpose-kernel"
+LABEL org.opencontainers.image.description="interpose-kernel ${FLAVOR_NAME} flavor — repackaged distro kernel with BPF-LSM"
+LABEL interposehq.kernel.flavor="${FLAVOR_NAME}"
+LABEL interposehq.kernel.version="${KERNEL_VERSION_FULL}"
+LABEL interposehq.kernel.tag-prefix="${TAG_PREFIX}"
+
+COPY --from=fetch /out/kernel             /kernel
+COPY --from=fetch /out/kernel.tar         /kernel.tar
+COPY --from=fetch /out/kernel-dev.tar     /kernel-dev.tar
+COPY --from=fetch /out/System.map         /System.map
+COPY --from=fetch /out/config             /config
+COPY --from=fetch /out/kernel-source-info /kernel-source-info

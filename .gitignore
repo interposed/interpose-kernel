@@ -1,0 +1,28 @@
+# Build outputs
+*.iso
+*-kernel
+*-initrd.img
+*-rootfs.ext4
+*.tar
+*.qcow2
+*.raw
+
+# linuxkit cache (gets large)
+.linuxkit/
+
+# Local clone of linuxkit source for the build (re-cloned on demand)
+.build/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS detritus
+.DS_Store
+Thumbs.db
+
+# Local secrets
+.env
+.env.*
