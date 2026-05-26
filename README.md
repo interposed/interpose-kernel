@@ -2,6 +2,8 @@
 
 Three flavors of Linux kernel images, repackaged from major distros, each with `CONFIG_BPF_LSM=y` + `CONFIG_DEBUG_INFO_BTF=y` + the full LSM framework. Drop into Firecracker, Lima, QEMU, or any microVM runtime that takes a kernel + rootfs.
 
+**Where this fits:** [`docs/where-this-fits.md`](docs/where-this-fits.md) — the layered architecture, why a custom kernel is necessary at all, and when you'd use this repo (vs. when the cooperative `interpose-sdk-go` SDK is enough).
+
 | Flavor | Image tag | Operator audience |
 |---|---|---|
 | **Ubuntu** | `startaworldpeace/interpose-kernel:ubuntu-24.04-bpf-lsm-<ver>` | Default. Dev/server crowd, AWS/GCP/Azure baseline, USN feed |

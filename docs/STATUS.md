@@ -1,40 +1,41 @@
 # interpose-kernel — current status
 
-**As of 2026-05-26. v0.1 in progress.**
+**As of 2026-05-26. v0.1.0 shipped.**
 
-## Done
+For where this repo fits in the broader interpose stack, see [where-this-fits.md](where-this-fits.md).
 
-- ✅ Architecture decision: Ubuntu kernel repackaging, not custom linuxkit build. See [decisions/0001-ubuntu-only-kernel.md](decisions/0001-ubuntu-only-kernel.md).
-- ✅ Repo restructure: single-flavor, clean layout
-- ✅ README + roadmap + this STATUS doc
-- ✅ `scripts/validate.sh` (works for any kernel image with our artifact layout)
-- ✅ `Makefile` targets defined: `build`, `validate`, `push`
-- ✅ `build.sh` skeleton (Dockerfile call wrapper; Dockerfile itself TODO)
+## v0.1.0 (current)
 
-## In progress / next
+| Flavor | Build | Validate | Smoke test | Image | Size |
+|---|---|---|---|---|---|
+| Ubuntu 24.04 / 6.8.0-117-generic | ✅ | ✅ all 8 flags | ✅ QEMU/HVF boot, `LSM support for eBPF active` in dmesg | `startaworldpeace/interpose-kernel:ubuntu-24.04-bpf-lsm-v0.1.0` | 137 MB |
+| Debian 12 / 6.1.0-48-cloud-arm64 | ✅ | ✅ all 8 flags; `bpf` in default LSM chain | — (not yet — same Dockerfile, expected to behave identically without `lsm=` boot arg) | `startaworldpeace/interpose-kernel:debian-12-bpf-lsm-v0.1.0` | 201 MB |
+| Rocky 9                          | 🚧 | — | — | — | — |
 
-- [ ] Write `Dockerfile`
-  - Multi-stage: fetch + verify + extract + repackage
-  - Stage 1 (`debian:bookworm-slim`): install `gnupg`, `curl`, `ubuntu-archive-keyring`. Download `linux-image-virtual-${UBUNTU_RELEASE}-${ARCH}.deb` + `linux-headers-virtual-${UBUNTU_RELEASE}-${ARCH}.deb` from `archive.ubuntu.com`. Verify with `gpgv`. Verify sha256 from `Packages.gz`.
-  - Stage 2 (`scratch`): extract deb contents to the linuxkit-compatible artifact layout (`/kernel`, `/kernel.tar`, `/kernel-dev.tar`, `/System.map`, `/kernel-source-info`).
-- [ ] Pin specific Ubuntu source-package version for reproducibility
-- [ ] Run `scripts/validate.sh` against the built image
-- [ ] Smoke test boot in Lima / Firecracker
+Smoke-test evidence for Ubuntu (QEMU on macOS arm64 with HVF accel, no rootfs, panic on missing root expected):
 
-## v0.1 deliverable
+```
+Linux version 6.8.0-117-generic ... #117-Ubuntu SMP PREEMPT_DYNAMIC
+Kernel command line: console=ttyAMA0 panic=1 lsm=landlock,lockdown,yama,integrity,apparmor,bpf
+LSM: initializing lsm=lockdown,capability,landlock,yama,apparmor,bpf,integrity
+landlock: Up and running.
+LSM support for eBPF active
+```
 
-A pushed image at `startaworldpeace/interpose-kernel:ubuntu-24.04-${KERNEL_VERSION}-bpf-lsm-v0.1.0` with:
-- vmlinuz that boots
-- modules tarball that loads
-- headers + .config that pass validate.sh
-- source provenance recorded
+## v0.2 themes
 
-## v0.2+
+- **Rocky 9 build pipeline** — designed (ADR-0003), needs the `Dockerfile.rpm` path exercised end-to-end. RPM tooling has different ergonomics than `apt-get download`.
+- **Multi-arch manifests** — currently arm64-only (built on Apple Silicon). Cross-build amd64 and publish a single multi-arch tag per flavor.
+- **End-to-end smoke test with full rootfs** — boot each flavor under Firecracker with an Alpine rootfs, confirm a sample LSM-BPF program loads and enforces.
+- **Push to Docker Hub** — images built locally; haven't been pushed. Hold until the multi-arch + Rocky work is done so the first published tag is the complete v0.2 set.
+- **CVE notification metadata** — `/kernel-source-info` currently records flavor/version/arch/build-timestamp. Extend with USN/DSA/RHSA references so `interpose doctor` can flag operators when a CVE-patched rebuild is available. Design in [cve-notification-system.md](cve-notification-system.md).
+
+## v0.3+
 
 See [roadmap.md](roadmap.md).
 
 ## Open questions
 
-1. **Where to keep the Ubuntu archive GPG key?** Embed in repo (reproducible but needs rotation tracking) or fetch at build time (always current but build is not offline). Recommend: embed, with a refresh script.
-2. **Multi-arch in one image manifest?** Recommend yes — one tag for the operator, two underlying images (`linux/amd64` + `linux/arm64`).
-3. **Update cadence for `:latest`?** GitHub Actions daily cron checks Ubuntu archive for new kernel debs. Manual approval gate before push for the first few rounds; automate fully after we trust the pipeline.
+1. **Pinning policy for kernel version** — do we follow latest LTS-stable continuously, or pin to a specific version per `interpose-kernel` major release? Currently latest-at-build-time; reconsider when we have multiple consumers.
+2. **GPG verification depth** — `apt-get download` validates the package against the apt keyring of the builder image. For v0.2 we may want to additionally verify the Release/InRelease chain explicitly and pin the keyring fingerprint independent of the builder image.
+3. **Update cadence for floating `:latest` tags** — automated daily check vs. release-on-CVE only. Lean toward release-on-CVE for now to keep operators in control of when their sandbox kernels rev.
