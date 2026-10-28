@@ -2,7 +2,7 @@
 
 Three flavors of Linux kernel images, repackaged from major distros, each with `CONFIG_BPF_LSM=y` + `CONFIG_DEBUG_INFO_BTF=y` + the full LSM framework. Drop into Firecracker, Lima, QEMU, or any microVM runtime that takes a kernel + rootfs.
 
-**Where this fits:** [`docs/where-this-fits.md`](docs/where-this-fits.md) — the layered architecture, why a custom kernel is necessary at all, and when you'd use this repo (vs. when the cooperative `interpose-sdk-go` SDK is enough).
+**Where this fits:** see [`kernel/` in the consolidated docs repo](https://github.com/interposed/docs) (docs moved out of this repo; `docs/README.md` points there) - the layered architecture, why a custom kernel is necessary at all, and when you'd use this repo (vs. when the cooperative `interpose-sdk-go` SDK is enough).
 
 | Flavor | Image tag | Operator audience |
 |---|---|---|
@@ -10,21 +10,25 @@ Three flavors of Linux kernel images, repackaged from major distros, each with `
 | **Debian** | `startaworldpeace/interpose-kernel:debian-12-bpf-lsm-<ver>` | Stricter free-software philosophy, DSA pipeline |
 | **Rocky** | `startaworldpeace/interpose-kernel:rocky-9-bpf-lsm-<ver>` | Enterprise / RHEL-compatible / RHSA pipeline |
 
-All three produce IDENTICAL OCI artifact layouts (`/kernel`, `/kernel.tar`, `/kernel-dev.tar`, `/System.map`, `/config`, `/kernel-source-info`) — downstream consumers (`interpose-sandbox`, Lima base configs) treat them interchangeably.
+All three produce IDENTICAL OCI artifact layouts (`/kernel`, `/kernel.tar`, `/kernel-dev.tar`, `/System.map`, `/config`, `/kernel-source-info`) - downstream consumers (`interpose-sandbox`, Lima base configs) treat them interchangeably.
 
-**See [docs/choosing-a-flavor.md](docs/choosing-a-flavor.md) for the decision guide.**
+**The flavor decision guide lives in the consolidated docs repo ([`kernel/` in the consolidated docs repo](https://github.com/interposed/docs)).**
 
 ## Status
 
-**v0.1.0** — Ubuntu and Debian flavors build, validate, and produce the published OCI artifact layout. Rocky is designed but its build pipeline ships in v0.2.
+**v0.1.0** - Ubuntu and Debian flavors build, validate, and produce the published OCI artifact layout. Rocky is designed but its build pipeline ships in v0.2.
 
 | Flavor | Build | Validate | Size | Notes |
 |---|---|---|---|---|
 | Ubuntu 24.04 (kernel 6.8.0-117-generic) | ✅ | ✅ all 8 flags | 137 MB | `bpf` not in default LSM chain → requires `lsm=...,bpf` boot arg |
-| Debian 12 (kernel 6.1.0-48-cloud-arm64)  | ✅ | ✅ all 8 flags | 201 MB | `bpf` **is** in default LSM chain — boots BPF-LSM-active out of the box |
-| Rocky 9                                  | 🚧 | —          | —     | Designed; build deferred to v0.2 |
+| Debian 12 (kernel 6.1.0-48-cloud-arm64)  | ✅ | ✅ all 8 flags | 201 MB | `bpf` **is** in default LSM chain - boots BPF-LSM-active out of the box |
+| Rocky 9                                  | 🚧 | -          | -     | Designed; build deferred to v0.2 |
 
-See [docs/STATUS.md](docs/STATUS.md) for full per-flavor build status and [docs/decisions/0003-three-flavor-strategy.md](docs/decisions/0003-three-flavor-strategy.md) for the design rationale.
+Per-flavor build state is in `flavors/<flavor>/STATUS.md`; cross-flavor status and the three-flavor design rationale (ADR-0003) now live in [`kernel/` in the consolidated docs repo](https://github.com/interposed/docs).
+
+**Working tree vs the v0.1.0 tag (uncommitted):** `flavors/ubuntu/flavor.env` is edited to pin the Ubuntu HWE kernel `6.17.0-40` (comment: >=6.12 for the interpose sleepable-LSM path) instead of the `6.8.0-117` shown in the table above. That change is not committed, not tagged and not validated here, so the table reflects the v0.1.0 tag.
+
+**microVM tier note:** the Firecracker microVM tier in `interpose-sandbox` has been run on a source-built Linux 6.12.114 (BPF-LSM + Landlock + BTF). That build recipe is NOT in this repo; this repo only repackages distro kernel packages.
 
 ## Build
 
@@ -63,7 +67,7 @@ One Dockerfile per distro **family** (`Dockerfile.deb` for Ubuntu+Debian, `Docke
 Build flow (deb-family example):
 
 1. `debian:bookworm-slim` builder pulls `linux-image-${VARIANT}-${ARCH}.deb` from the distro mirror.
-2. GPG-verify against the distro's archive keyring (v0.2: full Release/InRelease verification chain — currently HTTPS + Docker Hub provenance).
+2. GPG-verify against the distro's archive keyring (v0.2: full Release/InRelease verification chain - currently HTTPS + Docker Hub provenance).
 3. `dpkg-deb -x` extracts to staging; build the interpose-kernel artifact layout in `/out`.
 4. Final `FROM scratch` stage with just the artifacts.
 
@@ -95,16 +99,8 @@ interpose-kernel/
 ├── scripts/
 │   └── validate.sh           # works for all flavors (extracts .config, greps required flags)
 ├── docs/
-│   ├── STATUS.md             # cross-flavor build state
-│   ├── roadmap.md
-│   ├── compatibility-matrix.md   # 3-way feature comparison
-│   ├── choosing-a-flavor.md      # decision guide for operators
-│   ├── cve-notification-system.md   # multi-feed CVE tracking + notification design
-│   └── decisions/
-│       ├── 0001-ubuntu-only-kernel.md    # superseded by 0003
-│       ├── 0002-distro-choice.md         # partial supersede by 0003
-│       └── 0003-three-flavor-strategy.md # current
-└── .build/                   # gitignored — local build cache
+│   └── README.md             # pointer: docs moved to the consolidated docs repo (kernel/)
+└── .build/                   # gitignored - local build cache
 ```
 
 ## Activation: `bpf` in the LSM chain
@@ -119,7 +115,7 @@ on the kernel command line. `interpose-sandbox` sets this automatically via Fire
 
 ## CVE notifications
 
-The interpose daemon notifies operators when a new kernel image is available with CVE fixes. Each image carries `/interpose-kernel-info.json` with the upstream advisory IDs (USN for Ubuntu, DSA for Debian, RHSA/RLSA for Rocky). Detection is pull-based against Docker Hub; notification surfaces in `interpose doctor`, the browser-auth UI, and the audit log. See [`docs/cve-notification-system.md`](docs/cve-notification-system.md).
+The interpose daemon notifies operators when a new kernel image is available with CVE fixes. Each image carries `/interpose-kernel-info.json` with the upstream advisory IDs (USN for Ubuntu, DSA for Debian, RHSA/RLSA for Rocky). Detection is pull-based against Docker Hub; notification surfaces in `interpose doctor`, the browser-auth UI, and the audit log. Design notes are in the consolidated docs repo (`kernel/`).
 
 ## Related repos
 
